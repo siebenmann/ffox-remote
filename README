@@ -1,0 +1,31 @@
+== ffox-remote: lightweight remote control for Unix Firefox
+
+A running Firefox can be remotely controlled to do things like open new
+URLs; the mechanisms for this are platform dependent. Normal people do
+this by running Firefox again, for example on the command line by going
+'firefox NEW-URL', but it turns out that this has a number of drawbacks
+(including requiring Firefox itself to start up, which is not necessarily
+fast).
+
+ffox-remote is a (Go) program that speaks Firefox's remote control
+protocol on Unix/X. More specifically it speaks the newer and more arcane
+remote control protocol, instead of the older and simpler protocol that
+was used to implement Firefox's '-remote' command line argument and
+which a number of additional tools can use. A program to speak the new
+protocol has become necessary because Mozilla has now removed support
+for the old protocol from Firefox Nightly.
+
+Because the remote control protocol works via X properties, you can
+remote control a running Firefox from a remote machine through things
+like X forwarding. Because it is pure Go code, it can be cross-compiled
+for lightweight environments where you don't necessarily want to install
+or build Firefox.
+
+(ffox-remote uses Andrew Gallant's X Go Binding packages for the actual
+X protocol communication, https://github.com/BurntSushi/xgb and
+https://github.com/BurntSushi/xgbutil .)
+
+IMPORTANT NOTE: At the moment ffox-remote will not remote control your
+Firefox, only Chris Siebenmann's specially hacked Firefox. See the X
+property names at the start of main.go and the comment there. This will
+be fixed someday.
