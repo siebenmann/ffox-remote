@@ -25,7 +25,5 @@ or build Firefox.
 X protocol communication, https://github.com/BurntSushi/xgb and
 https://github.com/BurntSushi/xgbutil .)
 
-IMPORTANT NOTE: At the moment ffox-remote will not remote control your
-Firefox, only Chris Siebenmann's specially hacked Firefox. See the X
-property names at the start of main.go and the comment there. This will
-be fixed someday.
+TODO: discussion of the command line arguments and better documentation
+for them.

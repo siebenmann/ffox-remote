@@ -1,4 +1,4 @@
-// ffox-remote issues remote commands to Firefox through X windows
+// ffox-remote issues remote commands to Firefox through X (Windows)
 // properties, for modern versions of Firefox that have dropped
 // support for the -remote argument and the _MOZILLA_COMMAND X
 // property that it relied on (they now use a more complicated scheme
@@ -20,6 +20,10 @@
 //
 package main
 
+// Author: Chris Siebenmann
+// https://github.com/siebenmann/ffox-remote
+// Copyright: GPL v3
+
 import (
 	"bytes"
 	"encoding/binary"
@@ -39,28 +43,71 @@ import (
 
 // The X property names that the Firefox remote control protocol uses.
 //
-// The _MEZILLA_ prefix is Chris Siebenmann's own hack. The official
-// protocol uses _MOZILLA_.
-// TODO: figure out how to support both in one binary.
-const (
-	lockProp = "_MEZILLA_LOCK"
-	cmdlProp = "_MEZILLA_COMMANDLINE"
-	respProp = "_MEZILLA_RESPONSE"
-	// version is '5.1' currently and must match exactly
-	versProp = "_MEZILLA_VERSION"
+// These are vars instead of consts because of a gory hack for Chris's
+// personal use.
+var (
+	lockProp = "_MOZILLA_LOCK"
+	cmdlProp = "_MOZILLA_COMMANDLINE"
+	respProp = "_MOZILLA_RESPONSE"
+	versProp = "_MOZILLA_VERSION"
 	// Mozilla user, profile (usually 'default'), and
 	// program name (usually 'firefox')
-	userProp = "_MEZILLA_USER"
-	profProp = "_MEZILLA_PROFILE"
-	progProp = "_MEZILLA_PROGRAM"
+	userProp = "_MOZILLA_USER"
+	profProp = "_MOZILLA_PROFILE"
+	progProp = "_MOZILLA_PROGRAM"
+)
 
+const (
 	// Current value for versProp. This is a *protocol* version, not
 	// a Firefox version.
 	firefoxVersion = "5.1"
 )
 
-// We use the low level X Atom values for locking and the response,
-// so we get them now (effectively interning them in the server).
+//
+// The general remote control protocol goes like this:
+// 1. Find a or the Firefox window. It will have WM_STATE and at least
+//    _MOZILLA_VERSION set on it. Make sure you think you understand
+//    the protocol version; we conservatively insist on it being exactly
+//    5.1.
+//
+// 2. Check that _MOZILLA_PROFILE, _MOZILLA_USER, and _MOZILLA_PROGRAM
+//    match so that you are talking to the right instance with the right
+//    profile. (This is currently somewhat academic as you can't start
+//    a second browser in a way that listens, but this is a Firefox bug.)
+//    If you have found a Firefox window but it is the wrong profile et
+//    al, continue looking (return to step 1).
+//
+// 3. Obtain the remote control lock by being the person to set
+//    _MOZILLA_LOCK on the window. If you can't, wait for the
+//    _MOZILLA_LOCK property to go away and try again.
+//    (In theory the contents should be something that identify you, for
+//    help in debugging. In practice this doesn't matter; who's going to
+//    look?)
+//    The lock is necessary to prevent two different remote control
+//    clients from stomping over each other's efforts to send Firefox
+//    a command and read its reply. I don't think it's needed otherwise,
+//    but Firefox may look for it to be set or changed as a marker of
+//    something. Someday I may find out.
+//
+// 4. Set _MOZILLA_COMMANDLINE to the encoded Firefox command line. See
+//    below for how this is encoded, because it is crazy.
+//
+// 5. Wait for _MOZILLA_RESPONSE to be set and read it. In theory it is
+//    a SMTP/HTTP style 'Nxx <message>' response, where a '2xx' reply is
+//    success, a '5xx' is failure, a '1xx' means in progress, and there's
+//    some other prefixes too. In practice current versions of Firefox
+//    only ever send 200 or 5xx responses.
+//
+// 6. Release your ownership of _MOZILLA_LOCK by deleting the property.
+//
+// Note that because unlocking requires actively clearing a property,
+// it's possible for a fumbled remote control attempt to leave Firefox
+// in a 'locked' state. For this reason we support not trying to
+// acquire the lock (and we still clear the lock).
+
+// We use the low level X Atom values for locking and the response, so
+// we look them up at the start and remember them (effectively
+// interning them in the server).
 var lockatom, responseatom xproto.Atom
 
 func getAtom(xu *xgbutil.XUtil, aname string) xproto.Atom {
@@ -78,7 +125,9 @@ func getAtoms(xu *xgbutil.XUtil) {
 
 // ClientWindow finds the actual client window underneath what may be
 // a window manager frame. This is an implementation of
-// XmuClientWindow().
+// XmuClientWindow(), based on its documentation; we look through
+// direct children of the window for one with WM_STATE set, and if
+// there isn't one we return the window itself.
 func ClientWindow(xu *xgbutil.XUtil, win xproto.Window) xproto.Window {
 	tree, err := xproto.QueryTree(xu.Conn(), win).Reply()
 	if err != nil {
@@ -95,6 +144,8 @@ func ClientWindow(xu *xgbutil.XUtil, win xproto.Window) xproto.Window {
 	return win
 }
 
+// propMatch returns true if val is empty or if the X property prop is set
+// to it. It works only for string properties.
 func propMatch(xu *xgbutil.XUtil, win xproto.Window, prop, val string) bool {
 	pv, e := xprop.GetProperty(xu, win, prop)
 	if e != nil {
@@ -106,7 +157,14 @@ func propMatch(xu *xgbutil.XUtil, win xproto.Window, prop, val string) bool {
 
 // Find the Firefox window for a specific user, profile, and program
 // (if they are set). The window must have the exact correct version.
+// On failure we return 0. We print a warning if we found what looks
+// like a Firefox window but it has a _MOZILLA_VERSION with the wrong
+// version; this is for debugging in case the version ever does change
+// again.
 //
+// (<jwz>'s old moz-remote.c preferred an exact match but would take
+// any window with a _MOZILLA_VERSION if it had to. This is no longer
+// fully viable and anyways this way is simpler code.)
 func findFirefox(xu *xgbutil.XUtil, user, profile, program string) xproto.Window {
 	var wrongver string
 	root := xu.RootWin()
@@ -134,22 +192,24 @@ func findFirefox(xu *xgbutil.XUtil, user, profile, program string) xproto.Window
 			return win
 		}
 	}
+	// We only get here if we failed to find a matching window.
+	// Code flow means we'll print this warning if we found both
+	// a wrong-version window and a right-version window with a
+	// mismatch in protocol et al.
 	if wrongver != "" {
 		log.Printf("found a protocol %s Firefox window but no %s one.", wrongver, firefoxVersion)
 	}
 	return 0
 }
 
+// waitForPropChange waits for the X property patom on window win to
+// change or disappear (ie, a PropertyNotify event for it). It returns
+// with the event and true if this happened; it returns with an
+// undefined event and false if the window was deleted instead.
 func waitForPropChange(xu *xgbutil.XUtil, win xproto.Window, patom xproto.Atom) (xevent.PropertyNotifyEvent, bool) {
 	var event xevent.PropertyNotifyEvent
 	good := false
 	done := false
-	w := xwindow.New(xu, win)
-	e := w.Listen(xproto.EventMaskPropertyChange, xproto.EventMaskStructureNotify)
-	if e != nil {
-		log.Print("listen error:", e)
-		return event, false
-	}
 	// NOTE: these two are type casts, not function calls, because we
 	// have anonymous closures here.
 	xevent.PropertyNotifyFun(
@@ -182,12 +242,6 @@ func waitForPropChange(xu *xgbutil.XUtil, win xproto.Window, patom xproto.Atom) 
 	}
 	xevent.Detach(xu, win)
 	xevent.Quit(xu) // just to be sure again
-
-	// Stop listening for property events for now.
-	e = w.Listen(xproto.EventMaskStructureNotify)
-	if e != nil {
-		log.Print("delisten error:", e)
-	}
 
 	return event, good
 }
@@ -272,16 +326,33 @@ func getResponse(xu *xgbutil.XUtil, win xproto.Window) string {
 // Process: obtain lock, set cmdlProp to the value, wait for the response
 // property to be set (or the window to poof), unlock Firefox.
 func submitCommand(xu *xgbutil.XUtil, win xproto.Window, cmd []byte, force bool) string {
+	// We must start listening to PropertyNotify events on the
+	// target window before we start trying to lock the window,
+	// because otherwise there is a race between our lock attempt
+	// failing, the lock holder removing the property, and us
+	// starting to listen to the event that could leave us hanging
+	// with the property unlocked.
+	// The ice is thin here. Let's hope this doesn't come up often.
+	// (Maybe we need to start listening while having the server
+	// grabbed.)
+	// My approach here is at least no worse than existing code that
+	// has worked for years.
+	w := xwindow.New(xu, win)
+	e := w.Listen(xproto.EventMaskPropertyChange, xproto.EventMaskStructureNotify)
+	if e != nil {
+		log.Fatal("listen error:", e)
+	}
+
 	// If we're forced, we don't try to lock Firefox but we will unlock
 	// it. As a side effect this will unstick a Firefox that has been
-	// incorrectly locked.
+	// locked and never unlocked.
 	if !force {
 		lockFirefox(xu, win)
 	}
 
 	// we can't use 'defer unlockFirefox()' because we're going
 	// to call log.Fatal().
-	e := xprop.ChangeProp(xu, win, 8, cmdlProp, "STRING", cmd)
+	e = xprop.ChangeProp(xu, win, 8, cmdlProp, "STRING", cmd)
 	if e != nil {
 		unlockFirefox(xu, win)
 		log.Fatal("command line change:", e)
@@ -358,6 +429,18 @@ func encodeCommandLine(pwd string, args []string) []byte {
 	return buf.Bytes()
 }
 
+// Rewrite all of our property names to have a different prefix.
+// This is a gory hack to keep the rest of the code simple because
+// Chris can't think of a better way right now.
+func fixupPref(pfix string, elems ...*string) {
+	plen := len("_MOZILLA")
+	for _, e := range elems {
+		us := *e
+		ns := fmt.Sprintf("%s%s", pfix, us[plen:])
+		*e = ns
+	}
+}
+
 func main() {
 	// Set Unix-like logging: to stderr, no timestamps, and our program
 	// name as a prefix.
@@ -369,12 +452,22 @@ func main() {
 	profile := flag.String("P", "default", "Firefox profile to match against")
 	program := flag.String("G", "firefox", "Firefox program name to match against")
 	force := flag.Bool("force", false, "Force us to go on even without the X window lock")
+	pfix := flag.String("pref", "", "Non-default X property prefix (hack)")
 	find := flag.Bool("find", false, "Find the Firefox window and exit")
 	verb := flag.Bool("v", false, "extra verbosity")
+	// In theory we could make users type 'ffox-remote ... -- -new-window'
+	// in order to have -new-window and -new-tab be passed to Firefox.
+	// In practice that is user-hostile, so we accept them as arguments
+	// that pass through.
 	nw := flag.Bool("new-window", false, "Pass -new-window to Firefox")
 	nt := flag.Bool("new-tab", false, "Pass -new-tab to Firefox")
 
 	flag.Parse()
+
+	// This is a gory hack. Don't ask.
+	if *pfix != "" {
+		fixupPref(*pfix, &lockProp, &cmdlProp, &respProp, &versProp, &userProp, &profProp, &progProp)
+	}
 
 	xu, err := xgbutil.NewConn()
 	if err != nil {
