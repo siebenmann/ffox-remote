@@ -364,15 +364,20 @@ func submitCommand(xu *xgbutil.XUtil, win xproto.Window, cmd []byte, force bool)
 	return resp
 }
 
-// from toolkit/components/remote/nsXRemoteService.cpp :
+// _MOZILLA_COMMANDLINE encoding
+// The following comment is taken from 
+// toolkit/components/remote/nsXRemoteService.cpp :
+//
 // the commandline property is constructed as an array of int32_t
 // followed by a series of null-terminated strings:
 //
 // [argc][offsetargv0][offsetargv1...]<workingdir>\0<argv[0]>\0argv[1]...\0
 // (offset is from the beginning of the buffer)
 //
+// ---
 // Although not documented, the integers are little-endian.
-// In practice the pwd is ignored.
+// In practice the pwd is ignored by Firefox right now (from what I can
+// tell).
 
 // addArgStr appends an argument to the argument buffer, returning its
 // length plus the trailing 0 byte.
