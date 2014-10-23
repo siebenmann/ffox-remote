@@ -21,6 +21,15 @@
 //		tabs respectively regardless of what your settings
 //		are.
 //
+//	-search
+//		Do a search on the 'URL' arguments instead of opening
+//		them as URLs, as if they were entered into Firefox's
+//		address bar. -search can't be used with -new-window
+//		or -new-tab (sorry, it's how Firefox behaves).
+//		Mechanically, this passes -search to the running
+//		Firefox and turns all arguments into a single argument
+//		that Firefox will search for.
+//
 //	-P PROFILE
 //	-U USER
 //	-G PROGRAM
@@ -74,6 +83,14 @@
 // main.go. It may not work for very old versions of Firefox that do not
 // support _MOZILLA_COMMANDLINE at all.
 //
+// BUGS:
+//
+// This doesn't do what you expect:
+//
+//     ffox-remote -search "a thing" thing2
+//
+// Right now this is equivalent to '-search a thing thing2'.
+//
 package main
 
 // Author: Chris Siebenmann
@@ -88,6 +105,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 
 	//"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/xproto"
@@ -522,6 +540,7 @@ func main() {
 	// that pass through.
 	nw := flag.Bool("new-window", false, "Pass -new-window to Firefox")
 	nt := flag.Bool("new-tab", false, "Pass -new-tab to Firefox")
+	search := flag.Bool("search", false, "Pass -search to Firefox to do a search")
 
 	flag.Parse()
 
@@ -550,11 +569,21 @@ func main() {
 	}
 
 	args := []string{"firefox"}
+	count := 0
 	if *nw {
 		args = append(args, "-new-window")
+		count++
 	}
 	if *nt {
 		args = append(args, "-new-tab")
+		count++
+	}
+	if *search {
+		args = append(args, "-search")
+		count++
+	}
+	if count > 1 {
+		log.Fatal("conflicting arguments:", strings.Join(args[1:], " "))
 	}
 
 	cwd, e := os.Getwd()
@@ -562,7 +591,16 @@ func main() {
 		log.Print("cannot get current directory:", e)
 		cwd = "/"
 	}
-	args = append(args, flag.Args()...)
+	// If we are given -search we do the convenient thing by
+	// turning all of the rest of the arguments into a single
+	// search term. Otherwise Firefox searches for the first
+	// argument and opens the rest of them as URLs, which is
+	// not really what you generally want.
+	if *search {
+		args = append(args, strings.Join(flag.Args(), " "))
+	} else {
+		args = append(args, flag.Args()...)
+	}
 	enc := encodeCommandLine(cwd, args)
 
 	resp := submitCommand(xu, foxwin, enc, *force)
