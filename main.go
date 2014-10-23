@@ -1,22 +1,78 @@
-// ffox-remote issues remote commands to Firefox through X (Windows)
-// properties, for modern versions of Firefox that have dropped
-// support for the -remote argument and the _MOZILLA_COMMAND X
-// property that it relied on (they now use a more complicated scheme
-// of transmitting the nominal Firefox command line in
-// _MOZILLA_COMMANDLINE).
+// ffox-remote sends remote control commands to a Unix Firefox instance.
+// Normally this is used to have that Firefox open new URLs for you.
+// This mimics what Firefox will do if you run a second copy but is much
+// lighter weight and can do some things that Firefox normally won't do.
 //
-// usage: ffox-remote [-U user] [-P profile] [-G program] [-find] [-v] [-new-window|-new-tab] [URL ...]
+// usage: ffox-remote [option ...] [URL ...]
 //
-//   -U/-P/-G: set options used to match a specific Firefox window.
-//             Normally -P is 'default', -G is 'firefox', and -U is blank
-//             to match anything.
-//   -find: only find the Firefox window and report its ID.
-//   -v: be more verbose. Report Firefox response and window ID.
-//   -new-window|-new-tab: passed to Firefox to open the URL(s) in new
-//                         windows and/or tabs.
-//   -force: force us to talk to Firefox even if we can't do the magic
-//           Firefox X property locking protocol. Clears this lock as
-//           a (useful) side effect.
+// The URL may be anything that Firefox recognizes, including 'about:'
+// URLs. If no URL is given, Firefox will open whatever you've set as
+// your default new window/new tab page. The URL doesn't have to have an
+// explicit http:/https:/etc; instead, anything you give will normally
+// be interpreted as a URL and handled however Firefox handles it (eg if
+// you give 'fred' as an argument, Firefox will try to find fred.com).
+//
+// The options are:
+//
+//	-new-window
+//	-new-tab
+//		These options are passed to the running Firefox and
+//		force it to open the URL(s) in new windows or new
+//		tabs respectively regardless of what your settings
+//		are.
+//
+//	-P PROFILE
+//	-U USER
+//	-G PROGRAM
+//		These set the name of the Firefox profile, user, and
+//		program to match Firefox windows against, in case you
+//		have multiple Firefox sessions running on the same X
+//		server. A blank value matches anything (and if there
+//		are multiple sessions, which one matches is uncertain).
+//		The default settings are -P 'default' -U '' -G 'firefox',
+//		which is normally what you want.
+//
+//	-force	Force us to talk to Firefox even if we can't get the
+//		lock for the remote command protocol. This may be
+//		necessary in some situations. We clear the lock if
+//		this is used.
+//
+//	-v	Be verbose; report the Firefox window ID and Firefox's
+//		response to our command.
+//
+//	-find	Don't send a command to Firefox, just report its window
+//		ID. This is mostly useful for debugging purposes.
+//
+//	-pref PREFIX
+//		Use PREFIX as the prefix on the Firefox X property names,
+//		instead of the normal _MOZILLA. This is only really useful
+//		for Chris Siebenmann.
+//
+// To start multiple sessions of Firefox with different profiles that
+// still listen for remote commands, you need to use '-new-instance'
+// when starting new instances. If you do nothing, they will try to
+// remote control your existing instance (even though they're using a
+// different profile); if you use -no-remote, they'll start but not
+// listen for remote control commands at all. ffox-remote with -P
+// can properly find and remote control each instance.
+//
+// Technically this passes a Firefox command line to the running Firefox,
+// but I've only tested this with passing URLs so I have no idea if other
+// Firefox command line options do anything useful or if they malfunction
+// spectacularly. Be cautious. In particular, -private does not appear to
+// work; instead it will silently fail to take effect.
+//
+// (A future version of ffox-remote may catch and block -private to
+// protect against problems here.)
+//
+// ffox-remote works for modern versions of Firefox that have
+// dropped support for the -remote argument and the _MOZILLA_COMMAND
+// X property that it relied on (they now use a more complicated
+// scheme of transmitting the nominal Firefox command line in
+// _MOZILLA_COMMANDLINE). For a discussion of Firefox's current X
+// property protocol for remote control, see the comment later on.
+// It may not work for very old versions of Firefox that do not
+// support _MOZILLA_COMMANDLINE at all.
 //
 package main
 
@@ -63,8 +119,10 @@ const (
 	firefoxVersion = "5.1"
 )
 
+// FIREFOX'S REMOTE CONTROL PROTOCOL
 //
 // The general remote control protocol goes like this:
+//
 // 1. Find a or the Firefox window. It will have WM_STATE and at least
 //    _MOZILLA_VERSION set on it. Make sure you think you understand
 //    the protocol version; we conservatively insist on it being exactly
@@ -72,10 +130,8 @@ const (
 //
 // 2. Check that _MOZILLA_PROFILE, _MOZILLA_USER, and _MOZILLA_PROGRAM
 //    match so that you are talking to the right instance with the right
-//    profile. (This is currently somewhat academic as you can't start
-//    a second browser in a way that listens, but this is a Firefox bug.)
-//    If you have found a Firefox window but it is the wrong profile et
-//    al, continue looking (return to step 1).
+//    profile. If you have found a Firefox window but it is the wrong
+//    profile et al, continue looking (return to step 1).
 //
 // 3. Obtain the remote control lock by being the person to set
 //    _MOZILLA_LOCK on the window. If you can't, wait for the
@@ -90,7 +146,7 @@ const (
 //    something. Someday I may find out.
 //
 // 4. Set _MOZILLA_COMMANDLINE to the encoded Firefox command line. See
-//    below for how this is encoded, because it is crazy.
+//    the comment later on for how this is encoded, because it is crazy.
 //
 // 5. Wait for _MOZILLA_RESPONSE to be set and read it. In theory it is
 //    a SMTP/HTTP style 'Nxx <message>' response, where a '2xx' reply is
@@ -365,7 +421,7 @@ func submitCommand(xu *xgbutil.XUtil, win xproto.Window, cmd []byte, force bool)
 }
 
 // _MOZILLA_COMMANDLINE encoding
-// The following comment is taken from 
+// The following comment is taken from
 // toolkit/components/remote/nsXRemoteService.cpp :
 //
 // the commandline property is constructed as an array of int32_t
