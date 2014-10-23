@@ -70,8 +70,8 @@
 // X property that it relied on (they now use a more complicated
 // scheme of transmitting the nominal Firefox command line in
 // _MOZILLA_COMMANDLINE). For a discussion of Firefox's current X
-// property protocol for remote control, see the comment later on.
-// It may not work for very old versions of Firefox that do not
+// property protocol for remote control, see the comment later on in
+// main.go. It may not work for very old versions of Firefox that do not
 // support _MOZILLA_COMMANDLINE at all.
 //
 package main

@@ -24,3 +24,8 @@ or build Firefox.
 (ffox-remote uses Andrew Gallant's X Go Binding packages for the actual
 X protocol communication, https://github.com/BurntSushi/xgb and
 https://github.com/BurntSushi/xgbutil .)
+
+For usage information and more discussion, see the comments at the
+start of main.go; this can just be godoc'd. In online form, see:
+
+	http://godoc.org/github.com/siebenmann/ffox-remote
