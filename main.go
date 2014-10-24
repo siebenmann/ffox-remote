@@ -524,7 +524,6 @@ func main() {
 	// Set Unix-like logging: to stderr, no timestamps, and our program
 	// name as a prefix.
 	log.SetPrefix("ffox-remote: ")
-	log.SetOutput(os.Stderr)
 	log.SetFlags(0)
 
 	user := flag.String("U", "", "Firefox user to match against")
