@@ -229,6 +229,33 @@ func propMatch(xu *xgbutil.XUtil, win xproto.Window, prop, val string) bool {
 	return (val == "" || string(pv.Value) == val)
 }
 
+// As of Firefox 131 or so, the 'profile' X property value is actually
+// the full path to the profile. This is also true for the D-Bus
+// version of the protocol. We cope by matching a full path if you
+// gave us one or only the suffix otherwise, so you can continue to
+// use plain profile names.
+func profileMatch(xu *xgbutil.XUtil, win xproto.Window, prop, val string) bool {
+	pv, e := xprop.GetProperty(xu, win, prop)
+	if e != nil {
+		return false
+	}
+	// unset value matches anything
+	sv := string(pv.Value)
+	if val == "" || sv == val {
+		return true
+	}
+	// If the property value starts with a /, we are dealing with
+	// the new Firefox 131 format. If the profile value to match
+	// against doesn't start with a /, assuming it is the old
+	// style name and match it against the '.<name>' at the end of
+	// the full profile path.
+	if sv[0] == '/' && val[0] != '/' &&
+		strings.HasSuffix(sv, "."+val) {
+		return true
+	}
+	return false
+}
+
 // Find the Firefox window for a specific user, profile, and program
 // (if they are set). The window must have the exact correct version.
 // On failure we return 0. We print a warning if we found what looks
@@ -261,7 +288,7 @@ func findFirefox(xu *xgbutil.XUtil, user, profile, program string) xproto.Window
 			continue
 		}
 		if propMatch(xu, win, userProp, user) &&
-			propMatch(xu, win, profProp, profile) &&
+			profileMatch(xu, win, profProp, profile) &&
 			propMatch(xu, win, progProp, program) {
 			return win
 		}
